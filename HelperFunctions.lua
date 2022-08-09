@@ -298,7 +298,7 @@ function calculate_bp_duration(player, pact, target, equipment, buffs)
     end
 
     -- Astral Conduit Job Points
-    if player.main_job == "SMN" then
+    if player.main_job == "SMN" and buffs['Astral Conduit'] then
         duration_bonus = duration_bonus + ((player.job_points.smn['Astral Conduit'] * 0.01) or 0)
     end
 
@@ -414,21 +414,70 @@ function calculate_ja_duration(player, ability, target, equipment, buffs)
     job_ability_jp_table = {
         ['Cover Duration'] = {
             trigger='Cover',
-            value=1,
+            value=1
         },
         ['Sepulcher Duration'] = {
             trigger='Sepulcher  ',
-            value=1,
+            value=1
         },
-        ['Dragon Breaker'] = {
+        ['Souleater Duration'] = {
+            trigger='Souleater',
+            value=1
+        },
+        ['Arcane Crest Duration'] = {
+            trigger='Arcane Crest',
+            value=1
+        },
+        ['Scarlet Delirium Duration'] = {
+            trigger = 'Scarlet Delirium',
+            value=1
+        },
+        -- Bard abilities are handled in another section
+        ['Run Wild Duration'] = {
+            trigger='Run Wild',
+            value=2
+        },
+        ['Shadowbind Duration'] = {
+            trigger='Shadowbind',
+            value=1
+        },
+        -- Astral Conduit is addressed in another section
+        ['Hamanoha Duration'] = {
+            trigger='Hamanoha',
+            value=1
+        },
+        -- TODO: Address Ninjutsu duration +10% after 550JP spent in another section
+        ['Dragon Breaker Duration'] = {
             trigger='Dragon Breaker',
-            value=1,
+            value=1
+        },
+        -- Blue Magic is handled in another section
+        -- Bust is strange, so will skip and rely on correction logic
+        --[[['Bust Duration'] = {
+            trigger='Bust',
+            value=10
+        }
+        ==]]
+        -- Scholar is addressed under casting logic
+        ['Dematerialize Duration'] = {
+            trigger='Dematerialize',
+            value=1
+        },
+        ['One for All Effect Duration'] = {
+            trigger='One for All',
+            value=1
         }
     }
 
     local main_job_jp_pairs = {
         'PLD',S{'Cover','Sepulcher'},
-        'DRG',S{'Dragon Breaker'}
+        'DRK',S{'Souleater','Arcane Crest','Scarlet Delirium'},
+        'BST',S{'Run Wild'},
+        'RNG',S{'Shadowbind'},
+        'SAM',S{'Hamanoha'},
+        'DRG',S{'Dragon Breaker'},
+        'GEO',S{'Dematerialize'},
+        'RUN',S{'One for All'}
     }
 
     local main_job_jp_check = false
