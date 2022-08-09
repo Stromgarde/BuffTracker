@@ -266,45 +266,7 @@ function calculate_song_duration(player, spell, target, equipment, buffs)
         ["Soul Voice"] = soul_voice_modifier,
         ["Flat Bonus"] = duration_bonus,
         ["Duration"] = duration_modifier,
-        ["Augment"] = augment_duration_modifier
-    }
-
-    if spell.targets == 32 then
-        return duration_map, modifiers
-    else
-        -- if spell.targets == 1 then
-        return duration, modifiers
-    end
-end
-
-function calculate_blue_magic_duration(player, spell, target, equipment, buffs)
-    local equipped_items = fetch_equipped_items(equipment)
-
-    local base_duration = spell.duration or 0
-    local duration_modifier = 1
-    local duration_bonus = 0
-
-    -- Unbridled Learning Effect II (JP, Carcharian Verve is unique here)
-    if not spell.english == 'Carcharian Verve' then
-        duration_modifier = duration_modifier + (player.job_points.blu['Unbridled Learning Effect II '] or 0) * 0.01
-    end
-
-    -- Diffusion merits, 20 for raw (5 for each past the first) and mirage+ charuqs [aug] 5/merit
-    if player.merits['Diffusion'] then
-        duration_modifier = 1 + (player.merits['Diffusion'] - 1) * 0.05
-        duration_modifier = duration_modifier + 
-            ((player.merits['Diffusion'] - 1)) * 
-            search_augments(equipped_items, 'Enhances "Diffusion" effect'):reduce(function(total, aug) return total + ((not aug.sign or aug.sign=='+') and aug.value or (aug.value * -1)) end, 0) * 0.05
-    end
-
-    local duration = (base_duration * duration_modifier + duration_bonus)
-
-    duration = math.floor(duration)
-
-    local modifiers = {
-        ["Flat Bonus"] = duration_bonus,
-        ["Duration"] = duration_modifier,
-        ["Augment"] = augment_duration_modifier
+        ["Augment"] = augment_duration_modifier,
     }
 
     if spell.targets == 32 then
@@ -322,41 +284,43 @@ function calculate_bp_duration(player, pact, target, equipment, buffs)
 
     local duration_bonus = 0
     local duration_modifier = 1
-    local base_duration = (pact.duration or 0)
-
-    -- Perfect Defense is the only Rage pact with variable duration
-    if pact.type == 'BloodPactRage' and pact.english ~= 'Perfect Defense' then return base_duration end
+    local base_duration = (spell.duration or 0)
 
     -- We don't actually care about equipment for this one since skill is pulled directly from memory
 
     --[[ For most abilities the duration is given by:
         base_duration + skill_over_300/100
         Known exceptions: 15 minutes: Aerial Armor, Earthen Ward,
-        Perfect Defense, Reraise II, whatever Atomos does
-        Filter on targets == 32 for enfeebling pacts ]]
-    -- TODO: Account for Atomos buff stealing
-    if (player.skills['summoning_magic'] >= 300) and (pact.duration >= 60) and (pact.duration <= 180) 
-        and not pact.targets.Enemy then
-        duration_bonus = duration_bonus + player.skills['summoning_magic'] - 300
-    elseif pact.english == 'Perfect Defense' then
-        duration_bonus = player.skills['summoning_magic'] / 20
-        if duration_bonus > 30 then duration_bonus = 30 end
+        Perfect Defense, Reraise II, whatever Atomos does ]]
+    -- TODO: Perfect Defense does not have a default duration in res/job_abilities.lua
+    if (player.skills['???'] >= 300) and (pact.duration >= 60) and (pact.duration <= 180) then
+        duration_bonus = duration_bonus + math.floor((player.skills['???'] - 300))
     end
 
     -- Astral Conduit Job Points
-    if player.main_job == "SMN" and buffs['Astral Conduit'] then
-        duration_modifier = duration_modifier + ((player.job_points.smn['Astral Conduit'] or 0) * 0.01)
+    if player.main_job == "SMN" then
+        duration_bonus = duration_bonus + ((player.job_points.smn['Astral Conduit'] * 0.01) or 0)
     end
 
-    duration = (base_duration + duration_bonus) * duration_modifier
+    duration = (base_duration + duration_bonus) * duration_bonus
+
+    local duration_map = table.map(resist_state_modifiers,
+        function(resist_multiplier)
+            return math.floor(duration * resist_multiplier)
+        end)
 
     local modifiers = {
         ["Flat Bonus"] = duration_bonus,
         ["Duration"] = duration_modifier,
-        ["Augment"] = augment_duration_modifier
+        ["Augment"] = augment_duration_modifier,
     }
 
-    return duration, modifiers
+    if spell.targets == 32 then
+        return duration_map, modifiers
+    else
+        -- if spell.targets == 1 then
+        return duration, modifiers
+    end
 end
 
 -- Job Ability Calculations
@@ -368,12 +332,23 @@ function calculate_ja_duration(player, ability, target, equipment, buffs)
     local duration_bonus = 0
     local duration_modifier = 1
 
-    -- Merit or Job Points
-    job_ability_table = {
+    -- Special case for Cover's formula, this will be capped in almost all cases over lv75
+    -- cover_base_duration = 15 + min(max(floor((user VIT + user MND - target VIT*2)/4),0),15)
+    if ability.english == 'Cover' and player.level >= 75 then
+        duration_bonus = 15
+    end
+
+    -- Merit Points
+    job_ability_merit_table = {
         ['Tomahawk'] = {
             trigger='Tomahawk',
             value=15,
             initial=true}, -- This is an indication to use # of points in the category -1 as a multiplier
+        ['Cover Effect Length'] = {
+            trigger='Cover',
+            value=4,
+            initial=false
+        },
         ['Fealty'] = {
             trigger='Fealty',
             value=5,
@@ -401,38 +376,75 @@ function calculate_ja_duration(player, ability, target, equipment, buffs)
         multiplier=-1},
     ]]
 
+    local main_job_merit_pairs = {
+        'WAR',S{'Tomahawk'},
+        'PLD',S{'Cover','Fealty'},
+        'BST',S{'Killer Instinct'},
+        'DRG',S{'Angon'}
+    }
 
-    -- General Purpose
-    for merit_title, index in pairs(job_ability_table) do
-        if index.trigger == ability.english and player.merits[merit_title:gsub(' ', '_'):lower()] then
-            local adjustment = index.initial and 1 or 0
-            duration_bonus = duration_bonus + (player.merits[merit_title:gsub(' ', '_'):lower()] - adjustment) * index.value
+    local main_job_merit_check = false
+    for job, abilities in ipairs(main_job_merit_pairs) do
+        if player.main_job == job and abilities:contains(ability.english) then 
+            main_job_merit_check = true 
         end
     end
 
-    -- White Mage
-    -- Black Mage
-    -- Red Mage
-    -- Thief
-    -- Paladin
-    -- Dark Knight
-    -- Beastmaster
-    -- Bard
-    -- Ranger
-    -- Samurai
-    -- Ninja
-    -- Dragoon
-
-    if ability.english == "Dragon Breaker" then
-        -- +1 second per job point
-        duration_bonus = duration_bonus + player.job_points.drg.dragon_breaker_effect or 0
+    if main_job_merit_check then
+        for merit_title, index in pairs(job_ability_merit_table) do
+            if index.trigger == ability.english and player.merits[merit_title:gsub(' ', '_'):lower()] then
+                local adjustment = index.initial and 1 or 0
+                duration_bonus = duration_bonus + (player.merits[merit_title:gsub(' ', '_'):lower()] - adjustment) * index.value
+            end
+        end
     end
 
-    -- Summoner
-    -- Blue Mage
-    -- Puppetmaster
+    -- Thief
+    -- Dark Knight
+    -- Beastmaster
+    -- Ranger
+    -- Samurai
+    -- Ninja: Keep track of shadows, buff IDs are 66 (1), 444 (2), 445 (3), and 446 (4+)
+    -- Puppetmaster: Manoeuvers increase in duration by 1 second for every 3 that the puppet is deployed onto a target.
+    --               Might need to just read the value from memory here.
     -- Scholar
     -- Geomancer
+
+    -- Job Points
+    job_ability_jp_table = {
+        ['Cover Duration'] = {
+            trigger='Cover',
+            value=1,
+        },
+        ['Sepulcher Duration'] = {
+            trigger='Sepulcher  ',
+            value=1,
+        },
+        ['Dragon Breaker'] = {
+            trigger='Dragon Breaker',
+            value=1,
+        }
+    }
+
+    local main_job_jp_pairs = {
+        'PLD',S{'Cover','Sepulcher'},
+        'DRG',S{'Dragon Breaker'}
+    }
+
+    local main_job_jp_check = false
+    for job, abilities in ipairs(main_job_jp_pairs) do
+        if player.main_job == job and abilities:contains(ability.english) then 
+            main_job_jp_check = true 
+        end
+    end
+
+    if main_job_jp_check then
+        for jp_title, index in pairs(job_ability_jp_table) do
+            if index.trigger == ability.english and player.job_points.job:lower()[jp_title:gsub(' ', '_'):lower()] then
+                duration_bonus = duration_bonus + (player.job_points.job:lower()[jp_title:gsub(' ', '_'):lower()]) * index.value
+            end
+        end
+    end
 
     -- Equipment
 
@@ -485,14 +497,18 @@ function calculate_roll_duration(player, ability, target, equipment, buffs)
             initial=true}
     }
 
-    for merit_title, index in pairs(corsair_merit_modifiers) do
-        local adjustment = index.initial and 1 or 0
-        duration_bonus = duration_bonus * (player.merits[merit_title:gsub(' ', '_'):lower()] - adjustment) * index.value
+    if player.main_job == "COR" then
+        for merit_title, index in pairs(corsair_merit_modifiers) do
+            local adjustment = index.initial and 1 or 0
+            duration_bonus = duration_bonus + (player.merits[merit_title:gsub(' ', '_'):lower()] - adjustment) * index.value
+        end
+
+        duration_bonus = duration_bonus + (player.job_points.cor.phantom_roll_effect * 2) or 0
     end
 
-    duration_bonus = (player.job_points.cor.phantom_roll_effect * 2) or 0
-
     -- Equipment
+    -- Only the greatest bonus to duration from equipment is applied; it does not stack.
+    local max_bonus = 0
     for _, item in ipairs(equipped_items) do
         local modifiers = ja_modifiers[item.id]
         if modifiers then -- Everything else
@@ -502,12 +518,16 @@ function calculate_roll_duration(player, ability, target, equipment, buffs)
                     if index.percent == true then
                         duration_modifier = duration_modifier + index.value
                     else
-                        duration_bonus = duration_bonus + index.value
+                        if index.value > max_modifier then
+                            max_bonus = index.value
+                        end
                     end
                 end
             end
         end
     end
+
+    duration_bonus = duration_bonus + max_bonus
 
     local duration = (base_duration + duration_bonus) * duration_modifier
 
@@ -930,56 +950,4 @@ function unpack_equipment_inf0(equipment)
     equipment.unpacked = equip_info
 
     return equipment
-end
-
--- This table will calculate at the time it is called, for the keys it is called
-conditions = {
-    ['In Dynamis:'] = function(info, buffs)
-        local dynamis_zones = S{39,40,41,42,134,135,185,186,187,188,294,295,296,297}
-        local ffxi_info = windower.ffxi.get_info()
-        return dynamis_zones:contains(ffxi_info.zone)
-    end,
-    ['Assault:'] = function(info, buffs)
-        local assault_zones = S{69,66,63,56,55,77}
-        local ffxi_info = windower.ffxi.get_info()
-        return assault_zones:contains(ffxi_info.zone)
-    end,
-    -- Conditions which expect an argument will need to be handled separately
-    ['Reives:'] = function(info, buffs) 
-        return buffs['Reive Mark']
-    end,
-    ['Nighttime:'] = function(info, buffs)
-        local ffxi_info = windower.ffxi.get_info()
-        return (ffxi_info['time'] < 360) or (ffxi_info['time'] >= 1080)
-    end,
-    ['Dusk to Dawn:'] = function(info, buffs)
-        local ffxi_info = windower.ffxi.get_info()
-        return (ffxi_info['time'] < 420) or (ffxi_info['time'] >= 1020)
-    end,
-    ['Daytime:'] = function(info, buffs)
-        local ffxi_info = windower.ffxi.get_info()
-        return (ffxi_info['time'] >= 360) and (ffxi_info['time'] < 1080)
-    end
-    -- To be implemented
-    -- Set:
-    -- Days of the week; firesday = 0
-    -- Weather:
-    -- Moon phase
-    -- vs enemy types
-    -- Citizenship
-    -- Nation control
-    -- Latent Effect:
-    -- Poison:
-    -- Paralysis:
-    -- Besieged:
-    -- Salvage:
-    -- Unity Ranking:
-}
-
-function get_world_info()
-    local info = cache.get_info
-    if not info then
-        info = windower.ffxi.get_info()
-        cache.get_info = info       
-    end
 end
